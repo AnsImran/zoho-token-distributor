@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Compile Python
+        run: uv run python -m compileall -q app
+
+      - name: Run tests
+        run: uv run --with pytest --with pytest-asyncio pytest tests/ -q
+
+  deploy:
+    name: Deploy (container)
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: true
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ secrets.DEPLOY_HOST }}" || (echo "Missing secret: DEPLOY_HOST" && exit 1)
+          test -n "${{ secrets.DEPLOY_USER }}" || (echo "Missing secret: DEPLOY_USER" && exit 1)
+          test -n "${{ secrets.DEPLOY_GIT_PATH }}" || (echo "Missing secret: DEPLOY_GIT_PATH" && exit 1)
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || (echo "Missing secret: DEPLOY_SSH_KEY" && exit 1)
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/id_ed25519 <<'EOF'
+          ${{ secrets.DEPLOY_SSH_KEY }}
+          EOF
+          chmod 600 ~/.ssh/id_ed25519
+
+          PORT="${{ secrets.DEPLOY_PORT }}"
+          if [ -z "$PORT" ]; then PORT="22"; fi
+          ssh-keyscan -p "$PORT" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull and redeploy container
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${{ secrets.DEPLOY_PORT }}"
+          if [ -z "$PORT" ]; then PORT="22"; fi
+
+          DEPLOY_GIT_PATH_B64="$(printf '%s' "${{ secrets.DEPLOY_GIT_PATH }}" | base64 -w0)"
+
+          ssh -p "$PORT" -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "DEPLOY_GIT_PATH_B64='$DEPLOY_GIT_PATH_B64' bash -s" <<'EOS'
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+
+          deploy_git_path="$(printf '%s' "$DEPLOY_GIT_PATH_B64" | base64 -d)"
+          cd "$deploy_git_path"
+
+          git fetch --prune origin main
+          git checkout main
+          git reset --hard origin/main
+
+          docker compose up --build -d
+
+          echo "Waiting for token-service to become healthy..."
+          timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" token-service 2>/dev/null | grep -q healthy; do sleep 2; done'
+          echo "token-service is healthy."
+          docker compose ps
+          EOS
