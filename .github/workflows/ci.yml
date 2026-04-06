@@ -60,10 +60,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          cat > ~/.ssh/id_ed25519 <<'EOF'
-          ${{ secrets.DEPLOY_SSH_KEY }}
-          EOF
-          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
           PORT="${{ secrets.DEPLOY_PORT }}"
           if [ -z "$PORT" ]; then PORT="22"; fi
@@ -78,7 +76,7 @@ jobs:
 
           DEPLOY_GIT_PATH_B64="$(printf '%s' "${{ secrets.DEPLOY_GIT_PATH }}" | base64 -w0)"
 
-          ssh -p "$PORT" -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+          ssh -p "$PORT" -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "DEPLOY_GIT_PATH_B64='$DEPLOY_GIT_PATH_B64' bash -s" <<'EOS'
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
