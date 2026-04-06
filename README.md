@@ -4,7 +4,7 @@ Internal microservice that caches Zoho OAuth access tokens and proactively refre
 
 ## How It Works
 
-1. On startup, the service fetches an access token from Zoho using the OAuth2 `refresh_token` grant.
+1. On startup, the service fetches an access token from Zoho using the OAuth2 `refresh_token` grat.
 2. The token is held in an in-memory cache and served instantly via `GET /token`.
 3. A background loop monitors expiry and refreshes the token **2 minutes before it expires** (tokens last 1 hour).
 4. If a refresh fails, the service retries every 15 seconds until it succeeds.
