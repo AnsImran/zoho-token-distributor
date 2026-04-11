@@ -6,24 +6,23 @@ response shapes, and Pydantic serialisation — without hitting Zoho.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
-from unittest.mock import patch
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import token_manager
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fake_cache(seconds_remaining: float = 3000.0) -> Dict[str, Any]:
-    now = datetime.now(timezone.utc)
+
+def _fake_cache(seconds_remaining: float = 3000.0) -> dict[str, Any]:
+    now = datetime.now(UTC)
     return {
-        "token":      "fake-token-abc",
+        "token": "fake-token-abc",
         "created_at": now - timedelta(seconds=3600 - seconds_remaining),
         "expires_at": now + timedelta(seconds=seconds_remaining),
     }
@@ -32,6 +31,7 @@ def _fake_cache(seconds_remaining: float = 3000.0) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _reset_module_state():
@@ -43,13 +43,23 @@ def _reset_module_state():
     token_manager._refresh_task = None
 
 
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    """Clear the lru_cache on get_settings so tests are isolated."""
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture()
 def client():
     """TestClient that skips the real lifespan (no Zoho calls)."""
-    from app.main import app
-
     # Override lifespan to be a no-op so we control cache state in tests.
     from contextlib import asynccontextmanager
+
+    from app.main import app
 
     @asynccontextmanager
     async def _noop_lifespan(app):
@@ -63,6 +73,7 @@ def client():
 # ---------------------------------------------------------------------------
 # GET /token
 # ---------------------------------------------------------------------------
+
 
 class TestGetToken:
     def test_returns_token_when_cached(self, client):
@@ -87,7 +98,7 @@ class TestGetToken:
         resp = client.get("/token")
         body = resp.json()
 
-        assert set(body.keys()) == {"access_token", "created_at", "expires_at", "token_type"}
+        assert set(body.keys()) == {"access_token", "created_at", "expires_at", "token_type", "is_stale"}
 
     def test_timestamps_are_iso_format(self, client):
         token_manager._TOKEN_CACHE = _fake_cache()
@@ -112,6 +123,7 @@ class TestGetToken:
 # GET /health
 # ---------------------------------------------------------------------------
 
+
 class TestHealth:
     def test_returns_ok_with_cached_token(self, client):
         token_manager._TOKEN_CACHE = _fake_cache()
@@ -123,12 +135,12 @@ class TestHealth:
         assert body["token_cached"] is True
         assert body["expires_at"] is not None
 
-    def test_returns_ok_without_cached_token(self, client):
+    def test_returns_degraded_without_cached_token(self, client):
         resp = client.get("/health")
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "ok"
+        assert body["status"] == "degraded"
         assert body["token_cached"] is False
         assert body["expires_at"] is None
 
@@ -141,4 +153,96 @@ class TestHealth:
         resp = client.get("/health")
         body = resp.json()
 
-        assert set(body.keys()) == {"status", "token_cached", "expires_at"}
+        expected_keys = {
+            "status",
+            "token_cached",
+            "token_is_stale",
+            "expires_at",
+            "refresh_loop_alive",
+            "last_refresh_success",
+        }
+        assert set(body.keys()) == expected_keys
+
+    def test_healthz_always_200(self, client):
+        """Liveness probe should always return 200."""
+        resp = client.get("/healthz")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_readyz_reports_status(self, client):
+        """Readiness probe should report degraded when no token."""
+        resp = client.get("/readyz")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "degraded"
+        assert resp.json()["token_cached"] is False
+
+
+# ---------------------------------------------------------------------------
+# New feature tests (Phase 8)
+# ---------------------------------------------------------------------------
+
+
+class TestAPIVersioning:
+    def test_v1_token_endpoint(self, client):
+        """GET /v1/token should work identically to /token."""
+        token_manager._TOKEN_CACHE = _fake_cache()
+        resp = client.get("/v1/token")
+        assert resp.status_code == 200
+        assert resp.json()["access_token"] == "fake-token-abc"
+
+    def test_v1_healthz_endpoint(self, client):
+        """GET /v1/healthz should return liveness probe."""
+        resp = client.get("/v1/healthz")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_v1_readyz_endpoint(self, client):
+        """GET /v1/readyz should return readiness probe."""
+        resp = client.get("/v1/readyz")
+        assert resp.status_code == 200
+
+
+class TestResponseHeaders:
+    def test_request_id_header_returned(self, client):
+        """Responses should include X-Request-ID header."""
+        token_manager._TOKEN_CACHE = _fake_cache()
+        resp = client.get("/token")
+        assert "X-Request-ID" in resp.headers
+
+    def test_request_id_echoed_when_provided(self, client):
+        """When caller provides X-Request-ID, it should be echoed back."""
+        token_manager._TOKEN_CACHE = _fake_cache()
+        resp = client.get("/token", headers={"X-Request-ID": "test-123"})
+        assert resp.headers["X-Request-ID"] == "test-123"
+
+    def test_cache_control_header_on_token(self, client):
+        """GET /token should include Cache-Control header."""
+        token_manager._TOKEN_CACHE = _fake_cache()
+        resp = client.get("/token")
+        assert "Cache-Control" in resp.headers
+        assert resp.headers["Cache-Control"].startswith("private, max-age=")
+
+
+class TestStaleTokenHandling:
+    def test_stale_token_returns_200_with_flag(self, client):
+        """Expired token should still return 200, with is_stale=True."""
+        token_manager._TOKEN_CACHE = _fake_cache(seconds_remaining=-60)
+        resp = client.get("/token")
+        assert resp.status_code == 200
+        assert resp.json()["is_stale"] is True
+
+    def test_fresh_token_has_is_stale_false(self, client):
+        """Fresh token should have is_stale=False."""
+        token_manager._TOKEN_CACHE = _fake_cache(seconds_remaining=3000)
+        resp = client.get("/token")
+        assert resp.status_code == 200
+        assert resp.json()["is_stale"] is False
+
+    def test_readyz_reports_degraded_when_stale(self, client):
+        """Readiness probe should report degraded for stale token."""
+        token_manager._TOKEN_CACHE = _fake_cache(seconds_remaining=-60)
+        resp = client.get("/readyz")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["token_is_stale"] is True
