@@ -4,69 +4,11 @@ Internal microservice that caches Zoho OAuth access tokens and proactively refre
 
 ## Architecture
 
-```
-                          +-------------------------------+
-                          |      Zoho OAuth API           |
-                          |  accounts.zoho.com/oauth/v2   |
-                          +---------------+---------------+
-                                          |
-                              POST /token (refresh_token grant)
-                                          |
-                          +---------------v---------------+
-                          |                               |
-                          |     Zoho Token Service        |
-                          |     (FastAPI, single worker)  |
-                          |                               |
-                          |  +-------------------------+  |
-                          |  |    Background Loop      |  |
-                          |  |                         |  |
-                          |  |  1. Sleep until 2 min   |  |
-                          |  |     before expiry       |  |
-                          |  |  2. Fetch fresh token   |  |
-                          |  |  3. Replace cache       |  |
-                          |  |  4. On failure: backoff |  |
-                          |  |     with jitter, retry  |  |
-                          |  +------------+------------+  |
-                          |               |               |
-                          |               v               |
-                          |  +-------------------------+  |
-                          |  |   In-Memory Cache       |  |
-                          |  |   (single dict slot)    |  |
-                          |  +------------+------------+  |
-                          |               |               |
-                          +---------------+---------------+
-                                          |
-                              GET /v1/token (instant read)
-                                          |
-                    +---------------------+---------------------+
-                    |                     |                     |
-              +-----v-----+        +-----v-----+        +-----v-----+
-              | Service A  |        | Service B  |        | Service C  |
-              | (consumer) |        | (consumer) |        | (consumer) |
-              +------------+        +------------+        +------------+
-```
+![Architecture Diagram](docs/architecture.png)
 
 ## How It Works
 
-```
-Startup                          Steady State                         Failure Recovery
-  |                                  |                                     |
-  v                                  v                                     v
-Validate config (fail fast)    Sleep until 2 min before expiry       Log error
-  |                                  |                                     |
-  v                                  v                                     v
-Fetch initial token             Fetch fresh token from Zoho          Exponential backoff
-  |                                  |                                 (2s, 4s, 8s, ... 120s max)
-  |--- fail? --> log, continue       |                                 + random jitter
-  |              (retry in loop)     v                                     |
-  v                             Replace cache atomically               Retry indefinitely
-Launch background loop              |                                     |
-  |                                  v                                     v
-  v                             Serve via GET /v1/token              Serve stale token
-Ready to serve requests              |                               (is_stale: true)
-                                     v
-                                Loop forever
-```
+![Token Lifecycle](docs/request_flow.png)
 
 1. **Startup** — validates all configuration via Pydantic Settings (fails fast on missing env vars), fetches the first token from Zoho, and launches the background refresh loop. If the initial fetch fails, the service starts anyway and retries in the background.
 2. **Serving** — `GET /v1/token` returns the cached token instantly from memory. No Zoho API call on the hot path.
@@ -218,23 +160,7 @@ zoho_token_service/
 
 The GitHub Actions workflow runs on every push and pull request with four jobs:
 
-```
-Push / PR
-  |
-  +---> Lint & Type Check (ruff check, ruff format, mypy)
-  |
-  +---> Test (pytest with 80% coverage threshold)
-  |
-  +---> Dependency Audit (pip-audit for known CVEs)
-  |
-  v
-All pass? ---> Deploy (only on push to main)
-               |
-               +---> SSH into production server
-               +---> git pull latest code
-               +---> docker compose up --build -d
-               +---> Wait for health check to pass
-```
+![CI/CD Pipeline](docs/ci_cd_pipeline.png)
 
 ## Observability
 
