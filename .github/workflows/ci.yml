@@ -28,7 +28,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Ruff check
         run: uv run ruff check app/ tests/
@@ -57,7 +57,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Compile Python
         run: uv run python -m compileall -q app
@@ -83,7 +83,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Audit dependencies
         run: uv run pip-audit
