@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings, get_settings
-
+from app.config import Settings
 
 
 def test_settings_requires_zoho_refresh_token(monkeypatch):

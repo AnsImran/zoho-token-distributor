@@ -61,7 +61,6 @@ def _reset_module_state():
 # ---------------------------------------------------------------------------
 
 
-
 @pytest.mark.asyncio
 async def test_fetch_fresh_token_populates_cache(monkeypatch):
     """After _fetch_fresh_token, all three cache fields should be non-None."""

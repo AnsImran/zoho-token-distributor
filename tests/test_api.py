@@ -43,7 +43,6 @@ def _reset_module_state():
     token_manager._refresh_task = None
 
 
-
 @pytest.fixture()
 def client():
     """TestClient that skips the real lifespan (no Zoho calls)."""
