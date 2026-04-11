@@ -43,15 +43,6 @@ def _reset_module_state():
     token_manager._refresh_task = None
 
 
-@pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    """Clear the lru_cache on get_settings so tests are isolated."""
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
 
 @pytest.fixture()
 def client():

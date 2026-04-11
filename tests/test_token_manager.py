@@ -61,15 +61,6 @@ def _reset_module_state():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    """Clear the lru_cache on get_settings so env var changes take effect."""
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
 
 @pytest.mark.asyncio
 async def test_fetch_fresh_token_populates_cache(monkeypatch):

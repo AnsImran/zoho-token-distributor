@@ -8,13 +8,6 @@ from pydantic import ValidationError
 from app.config import Settings, get_settings
 
 
-@pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    """Clear the lru_cache on get_settings so env var changes take effect."""
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
 
 def test_settings_requires_zoho_refresh_token(monkeypatch):
     """Missing ZOHO_REFRESH_TOKEN should raise ValidationError."""
