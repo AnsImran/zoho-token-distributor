@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import get_settings
 from .logging_config import setup_logging
@@ -139,3 +140,18 @@ async def liveness_compat():
 async def readiness_compat():
     """Backward-compatible alias for /v1/readyz."""
     return await readiness()
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics endpoint (§38)
+# ---------------------------------------------------------------------------
+# Per-route HTTP histograms at GET /metrics. Health + metrics routes are
+# excluded so probe traffic doesn't pollute latency dashboards.
+Instrumentator(
+    excluded_handlers=[
+        "/metrics",
+        ".*/health.*",
+        ".*/healthz",
+        ".*/readyz",
+    ],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)

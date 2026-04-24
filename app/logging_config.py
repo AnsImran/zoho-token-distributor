@@ -7,8 +7,11 @@ Supports two output formats:
 
 import json
 import logging
+import logging.handlers
+import os
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 
 class JSONFormatter(logging.Formatter):
@@ -33,10 +36,29 @@ def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
     root = logging.getLogger()
     root.setLevel(level.upper())
 
-    handler = logging.StreamHandler(sys.stdout)
     if fmt == "json":
-        handler.setFormatter(JSONFormatter())
+        formatter: logging.Formatter = JSONFormatter()
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s — %(message)s"))
+        formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s — %(message)s")
 
-    root.handlers = [handler]
+    stderr_handler = logging.StreamHandler(sys.stdout)
+    stderr_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stderr_handler]
+
+    # Phase-2 observability: when WLS_LOG_FILE is set, also write to a
+    # rotating file so Promtail can tail it and ship to Loki. Same env
+    # var used across every service in the monorepo for a consistent
+    # log-shipper config.
+    file_path = os.environ.get("WLS_LOG_FILE")
+    if file_path:
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            file_path,
+            maxBytes=50 * 1024 * 1024,   # 50 MB per file
+            backupCount=5,               # 5 backups -> ~250 MB ceiling
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+
+    root.handlers = handlers
