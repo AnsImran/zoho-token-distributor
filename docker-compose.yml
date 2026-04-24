@@ -1,5 +1,9 @@
 services:
   token-service:
+    # CI builds this image and pushes to GHCR. `docker compose pull` on
+    # the server resolves to it. Build block retained as a fallback for
+    # local dev (no GHCR auth needed).
+    image: ghcr.io/ansimran/zoho-token-distributor/token-service:latest
     build:
       context: .
       args:
