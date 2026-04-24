@@ -54,8 +54,8 @@ def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(
             file_path,
-            maxBytes=50 * 1024 * 1024,   # 50 MB per file
-            backupCount=5,               # 5 backups -> ~250 MB ceiling
+            maxBytes=50 * 1024 * 1024,  # 50 MB per file
+            backupCount=5,  # 5 backups -> ~250 MB ceiling
             encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
