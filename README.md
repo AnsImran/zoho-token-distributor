@@ -167,3 +167,26 @@ The GitHub Actions workflow runs on every push and pull request with four jobs:
 - **Structured logging** — JSON format by default (configurable to `text` for local dev). All log entries include timestamp, level, logger name, and message. Request logs include the correlation ID.
 - **Request correlation** — every response includes an `X-Request-ID` header. If the caller sends one, it's echoed back; otherwise a UUID is generated. Logged with every request.
 - **Health probes** — `/v1/readyz` reports token freshness, refresh loop status, and last successful refresh time. `/v1/healthz` is a simple liveness check.
+
+## Deployment & observability (EC2)
+
+Production runs as a Docker container on a single EC2 host, deployed by GitHub Actions, observed by a shared Prometheus + Grafana + Tempo + Loki stack. Local dev is unaffected.
+
+### Containerization
+
+- **`Dockerfile`** — `python:3.12-slim`; deps via `uv sync --frozen --no-dev --no-install-project` from `pyproject.toml` + `uv.lock` (no dep drift across local/CI/prod; replaced an earlier hand-curated `pip install` list that silently went stale). `CMD` wrapped with `opentelemetry-instrument` (inert unless `OTEL_*` env vars set).
+- **`docker-compose.yml`** references the CI-built GHCR image **`ghcr.io/ansimran/zoho-token-distributor/token-service:latest`** with a `build:` fallback.
+- The committed compose file carries no environment-specific configuration; secrets come from `.env` at runtime and EC2-only wiring is layered on via an override file (below).
+
+### CI/CD
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main`: **lint** + **test** + **audit** → **build-and-push** (GHCR, registry-cached) → **deploy** (SSH to EC2, `git reset --hard origin/main`, `docker login ghcr.io`, `docker compose pull && up -d`, health-check). This was migrated from the older on-EC2 `docker compose up --build` deploy: CI now has a dedicated build-and-push job, and the deploy job runs `docker compose pull` against the GHCR image instead of building on the server. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `GHCR_USER`, `GHCR_TOKEN` (deploy path is fixed on the host).
+
+### EC2 topology
+
+The container joins the external Docker network **`observability-net`** (name-based service resolution; Prometheus scrapes it). An EC2-side `docker-compose.override.yml` (gitignored, not in this repo) injects `OTEL_*` env vars + `WLS_LOG_FILE` and joins that network; the committed compose file stays environment-agnostic. EC2 container name: **`token-service`**, internal port **`8000`** (host-mapped `127.0.0.1:8000`).
+
+### Observability (Phase 1 & 2)
+
+- **Phase 1 — metrics:** `/metrics` via `prometheus-fastapi-instrumentator`; Prometheus scrape job / `OTEL_SERVICE_NAME`: **`zoho-token-service`**.
+- **Phase 2 — traces + logs:** `opentelemetry-instrument` auto-instruments FastAPI + httpx → OTLP → OTel Collector → **Tempo**. JSON logs → `WLS_LOG_FILE` → **Promtail** → **Loki**; `OTEL_PYTHON_LOG_CORRELATION=true` adds `otelTraceID` for trace/log jumps. Explicit `opentelemetry-instrumentation-fastapi`/`-httpx`/`-logging` pinned in `pyproject.toml` (uv venvs ship without `pip`, so `opentelemetry-bootstrap -a install` silently no-ops).
